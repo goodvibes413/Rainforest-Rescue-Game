@@ -324,3 +324,137 @@ body {
 .gameover-btn:hover {
   background: #ff444433;
 }
+
+/* Mode / Difficulty Selectors */
+.select-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.select-label {
+  color: #888;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+.select-row {
+  display: flex;
+  gap: 10px;
+}
+
+.select-btn {
+  padding: 8px 20px;
+  background: #0d1a0d;
+  color: #666;
+  border: 2px solid #333;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.15s;
+}
+
+.select-btn:hover {
+  color: #aaa;
+  border-color: #555;
+}
+
+.select-btn.active {
+  background: #0d3d0d;
+  color: #00ff88;
+  border-color: #00ff88;
+  box-shadow: 0 0 10px #00ff8844;
+}
+
+/* 4-answer grid for math/trivia */
+.answer-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.answer-btn {
+  padding: 10px 16px;
+  background: #0d1a2e;
+  color: #88ccff;
+  border-color: #2255aa;
+  font-size: 13px;
+}
+
+.answer-btn:hover {
+  background: #1a3a5c;
+  color: #aaddff;
+  border-color: #4488dd;
+}
+
+/* Level Complete */
+.levelcomplete-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.88);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  gap: 12px;
+}
+
+.levelcomplete-title {
+  color: #00ff88;
+  font-size: 28px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  text-shadow: 0 0 20px #00ff88;
+}
+
+.levelcomplete-sub {
+  color: #ffaa00;
+  font-size: 14px;
+  letter-spacing: 2px;
+}
+
+.levelcomplete-next {
+  color: #888;
+  font-size: 11px;
+  letter-spacing: 1px;
+  margin-top: 4px;
+}
+
+/* Victory */
+.victory-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,10,0,0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  gap: 12px;
+}
+
+.victory-title {
+  color: #ffdd00;
+  font-size: 26px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  text-shadow: 0 0 20px #ffdd00, 0 0 40px #ffaa00;
+}
+
+.victory-sub {
+  color: #00ff88;
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-align: center;
+  max-width: 360px;
+}
