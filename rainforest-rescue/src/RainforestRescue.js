@@ -884,6 +884,7 @@ export default function RainforestRescue() {
   const [gamePhase, setGamePhase] = useState('start'); // start | playing | grammar | levelcomplete | victory | gameover
   const [fuel, setFuel] = useState(100);
   const [water, setWater] = useState(100);
+  const [damage, setDamage] = useState(0);
   const [animalsSaved, setAnimalsSaved] = useState(0);
   const [treesLost, setTreesLost] = useState(0);
   const [grammarQ, setGrammarQ] = useState(null);
@@ -907,16 +908,16 @@ export default function RainforestRescue() {
     stateRef.current = {
       tiles,
       animals: createAnimals(),
-      heli: { x: 200, y: 120, vx: 0, vy: 0 },
+      heli: { x: 200, y: 120, vx: 0, vy: 0, damage: 0 },
       waterDrops: [],
       waterSplashes: [],
       obstacles: [],
       crunchEffects: [],
-      bulldozer: { x: -80, y: (GROUND_ROW) * TILE_SIZE - 10, fuel: 100, stalled: 0, stopped: false, speed: levelConfig.bdSpeed },
+      bulldozers: [{ x: -80, y: (GROUND_ROW) * TILE_SIZE - 10, fuel: 100, stalled: 0, stopped: false, speed: levelConfig.bdSpeed, lastMove: Date.now() }],
+      lastBulldozerSpawn: Date.now(),
       scrollX: 0,
       frame: 0,
       lastFireSpread: Date.now(),
-      lastBulldozerMove: Date.now(),
       lastObstacleDrop: 0,
       fuel: 100,
       water: 100,
@@ -970,8 +971,14 @@ export default function RainforestRescue() {
         if (correct) {
           stateRef.current.fuel = Math.min(100, stateRef.current.fuel + 50);
           stateRef.current.water = Math.min(100, stateRef.current.water + 50);
+          stateRef.current.heli.damage = Math.max(0, (stateRef.current.heli.damage || 0) - 50);
           setFuel(stateRef.current.fuel);
           setWater(stateRef.current.water);
+          setDamage(stateRef.current.heli.damage);
+        } else {
+          // wrong answer: partial repair so helicopter isn't immediately re-triggered
+          stateRef.current.heli.damage = Math.min(50, stateRef.current.heli.damage || 0);
+          setDamage(stateRef.current.heli.damage);
         }
       }
       setGamePhase('playing');
@@ -1020,6 +1027,16 @@ export default function RainforestRescue() {
     const targetScrollX = clamp(heli.x - CANVAS_W / 2, 0, COLS * TILE_SIZE - CANVAS_W);
     gs.scrollX += (targetScrollX - gs.scrollX) * 0.1;
 
+    // ── Helicopter fire damage ────────────────────────────────────────────────
+    const heliCol = Math.floor(heli.x / TILE_SIZE);
+    const heliRow = Math.floor(heli.y / TILE_SIZE);
+    const heliTile = gs.tiles[heliRow]?.[heliCol];
+    if (heliTile && heliTile.type === TILE_FIRE) {
+      heli.damage = Math.min(100, (heli.damage || 0) + 0.4);
+    } else {
+      heli.damage = Math.max(0, (heli.damage || 0) - 0.05);
+    }
+
     // ── Water drops ──────────────────────────────────────────────────────────
     if (keys[' '] && gs.water > 0 && gs.frame % 12 === 0) {
       gs.waterDrops.push({ x: heli.x, y: heli.y + 24, vy: 3 });
@@ -1030,6 +1047,23 @@ export default function RainforestRescue() {
       const drop = gs.waterDrops[i];
       drop.y += drop.vy;
       drop.vy += 0.3;
+
+      // mid-fall: extinguish fire tile the drop passes through (above ground)
+      const midCol = Math.floor(drop.x / TILE_SIZE);
+      const midRow = Math.floor(drop.y / TILE_SIZE);
+      if (midRow >= GROUND_ROW && midRow < ROWS && midCol >= 0 && midCol < COLS) {
+        const midTile = gs.tiles[midRow]?.[midCol];
+        if (midTile && midTile.type === TILE_FIRE) {
+          midTile.type = TILE_HEALTHY;
+          midTile.treeVariant = randInt(0, 3);
+          for (let p = 0; p < 4; p++) {
+            const angle = (p / 4) * Math.PI * 2;
+            gs.waterSplashes.push({ x: drop.x, y: drop.y, vx: Math.cos(angle) * 2, vy: Math.sin(angle) * 1.5 - 1, life: 10 });
+          }
+          gs.waterDrops.splice(i, 1);
+          continue;
+        }
+      }
 
       // hit ground level?
       const hitY = GROUND_ROW * TILE_SIZE;
@@ -1068,7 +1102,7 @@ export default function RainforestRescue() {
     if (keys['d'] && gs.fuel >= OBSTACLE_COST && now - gs.lastObstacleDrop > 600) {
       gs.obstacles.push({
         x: heli.x,
-        y: gs.bulldozer.y,
+        y: gs.bulldozers[0].y,
         type: Math.random() < 0.5 ? 'log' : 'rock',
       });
       gs.fuel = Math.max(0, gs.fuel - OBSTACLE_COST);
@@ -1127,23 +1161,23 @@ export default function RainforestRescue() {
       }
     }
 
-    // ── Bulldozer ────────────────────────────────────────────────────────────
-    if (!gs.bulldozer.stopped) {
-      // check for stall (hit obstacle)
-      if (gs.bulldozer.stalled > 0) {
-        gs.bulldozer.stalled--;
-      } else if (now - gs.lastBulldozerMove > 80) {
-        gs.lastBulldozerMove = now;
+    // ── Bulldozers ───────────────────────────────────────────────────────────
+    for (const bd of gs.bulldozers) {
+      if (bd.stopped) continue;
+      if (bd.stalled > 0) {
+        bd.stalled--;
+      } else if (now - bd.lastMove > 80) {
+        bd.lastMove = now;
 
         // check collision with obstacles
-        const bdFront = gs.bulldozer.x + 66;
+        const bdFront = bd.x + 66;
         let hitObstacle = false;
         for (let i = gs.obstacles.length - 1; i >= 0; i--) {
           const obs = gs.obstacles[i];
           if (Math.abs(bdFront - obs.x) < 20) {
             hitObstacle = true;
-            gs.bulldozer.fuel -= BULLDOZER_FUEL_LOSS;
-            gs.bulldozer.stalled = BULLDOZER_STALL_TIME;
+            bd.fuel -= BULLDOZER_FUEL_LOSS;
+            bd.stalled = BULLDOZER_STALL_TIME;
             gs.crunchEffects.push({ x: obs.x, y: obs.y, startFrame: gs.frame });
             gs.obstacles.splice(i, 1);
             break;
@@ -1151,8 +1185,8 @@ export default function RainforestRescue() {
         }
 
         if (!hitObstacle) {
-          gs.bulldozer.x += gs.bulldozer.speed;
-          const col = Math.floor((gs.bulldozer.x + 60) / TILE_SIZE);
+          bd.x += bd.speed;
+          const col = Math.floor((bd.x + 60) / TILE_SIZE);
           if (col >= 0 && col < COLS) {
             for (let r = GROUND_ROW; r < ROWS; r++) {
               if (gs.tiles[r][col]) gs.tiles[r][col].type = TILE_DIRT;
@@ -1160,11 +1194,19 @@ export default function RainforestRescue() {
           }
         }
 
-        if (gs.bulldozer.fuel <= 0) {
-          gs.bulldozer.fuel = 0;
-          gs.bulldozer.stopped = true;
+        if (bd.fuel <= 0) {
+          bd.fuel = 0;
+          bd.stopped = true;
         }
       }
+    }
+
+    // spawn new bulldozer every 30 seconds (max 4 active)
+    const MAX_BULLDOZERS = 4;
+    const activeBulldozers = gs.bulldozers.filter(bd => !bd.stopped);
+    if (now - gs.lastBulldozerSpawn > 30000 && activeBulldozers.length < MAX_BULLDOZERS) {
+      gs.bulldozers.push({ x: -80, y: (GROUND_ROW) * TILE_SIZE - 10, fuel: 100, stalled: 0, stopped: false, speed: gs.levelConfig.bdSpeed, lastMove: Date.now() });
+      gs.lastBulldozerSpawn = now;
     }
 
     // age crunch effects
@@ -1235,6 +1277,7 @@ export default function RainforestRescue() {
     // ── Sync react state ─────────────────────────────────────────────────────
     setFuel(Math.round(gs.fuel));
     setWater(Math.round(gs.water));
+    setDamage(Math.round(heli.damage || 0));
     setAnimalsSaved(gs.animalsSaved);
     setTreesLost(gs.treesLost);
 
@@ -1370,10 +1413,12 @@ export default function RainforestRescue() {
       ctx.fillRect(splash.x - sx - 1, splash.y - 1, 3, 3);
     }
 
-    // Bulldozer
-    const bdx = gs.bulldozer.x - sx;
-    if (bdx > -80 && bdx < CANVAS_W + 10) {
-      drawBulldozer(ctx, bdx, gs.bulldozer.y, gs.bulldozer.fuel, gs.frame, gs.bulldozer.stopped);
+    // Bulldozers
+    for (const bd of gs.bulldozers) {
+      const bdx = bd.x - sx;
+      if (bdx > -80 && bdx < CANVAS_W + 100) {
+        drawBulldozer(ctx, bdx, bd.y, bd.fuel, gs.frame, bd.stopped);
+      }
     }
 
     // Helicopter
@@ -1385,16 +1430,17 @@ export default function RainforestRescue() {
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
     }
 
-    // ── Check empty resources → trigger grammar ───────────────────────────────
-    if ((gs.fuel <= 0 || gs.water <= 0) && gamePhase === 'playing') {
-      const reason = gs.fuel <= 0 ? 'FUEL DEPLETED' : 'WATER DEPLETED';
+    // ── Check empty resources / max damage → trigger grammar ─────────────────
+    if ((gs.fuel <= 0 || gs.water <= 0 || heli.damage >= 100) && gamePhase === 'playing') {
+      const reason = gs.fuel <= 0 ? 'FUEL DEPLETED' : gs.water <= 0 ? 'WATER DEPLETED' : 'HELICOPTER DAMAGED';
       triggerGrammar(reason);
       return;
     }
 
     // ── Level complete check ──────────────────────────────────────────────────
     const lvlTarget = gs.levelConfig?.animalsTarget || 3;
-    if (gs.animalsSaved >= lvlTarget) {
+    const allResolved = gs.animals.every(a => a.saved || a.lost);
+    if (gs.animalsSaved >= lvlTarget || allResolved) {
       if (gs.levelConfig?.id >= 5) {
         setGamePhase('victory');
       } else {
@@ -1404,7 +1450,7 @@ export default function RainforestRescue() {
     }
 
     // ── Game over check (bulldozer reached end or too many trees lost) ────────
-    if (gs.bulldozer.x > COLS * TILE_SIZE || gs.treesLost > COLS * (ROWS - GROUND_ROW) * 0.6) {
+    if (gs.bulldozers.some(bd => bd.x > COLS * TILE_SIZE) || gs.treesLost > COLS * (ROWS - GROUND_ROW) * 0.6) {
       setGamePhase('gameover');
       return;
     }
@@ -1533,6 +1579,22 @@ export default function RainforestRescue() {
           </div>
           <div style={{ color: water < 20 ? '#ff4444' : '#666', fontSize: 10 }}>
             {water}%
+          </div>
+        </div>
+
+        <div className="gauge-block">
+          <div className="gauge-label">🚁 Hull</div>
+          <div className="gauge-bar-outer">
+            <div
+              className="gauge-bar-inner"
+              style={{
+                width: `${100 - damage}%`,
+                background: damage > 60 ? '#ff2222' : damage > 30 ? '#ff8800' : '#44cc44',
+              }}
+            />
+          </div>
+          <div style={{ color: damage > 60 ? '#ff4444' : '#666', fontSize: 10 }}>
+            {100 - damage}%
           </div>
         </div>
 
