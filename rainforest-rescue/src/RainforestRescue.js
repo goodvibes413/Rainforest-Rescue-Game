@@ -153,6 +153,7 @@ const SKY_ROWS = 3;    // top 3 rows are sky
 const GROUND_ROW = SKY_ROWS; // first ground row index
 const FIRE_SPREAD_INTERVAL = 12000; // ms
 const ANIMAL_TYPES = ['monkey', 'bird', 'frog', 'toucan', 'sloth', 'jaguar'];
+const ANIMAL_EMOJI = { monkey: '🐒', bird: '🐦', frog: '🐸', toucan: '🦜', sloth: '🦥', jaguar: '🐆' };
 const OBSTACLE_COST = 5;        // helicopter fuel cost to drop an obstacle
 const BULLDOZER_FUEL_LOSS = 20; // fuel lost per obstacle hit
 const BULLDOZER_STALL_TIME = 60; // frames to pause when hitting obstacle
@@ -166,20 +167,25 @@ const TILE_DIRT = 'dirt';
 
 // ─── Colors ────────────────────────────────────────────────────────────────────
 const COLORS = {
-  sky: ['#1a6699', '#1a7aaa', '#1e8fbf'],
-  cloud: '#ddeeff',
-  healthy: ['#1a7a2a', '#1e8a30', '#157022', '#2a9a38'],
+  sky: ['#0a2a4a', '#123f6e', '#1a5c8f', '#2a8fc4'],
+  cloud: '#eaf6ff',
+  healthy: ['#1f9a3a', '#22ab3f', '#188233', '#33c24a'],
+  healthyDark: ['#136022', '#157024', '#0f5318', '#1c7d2a'],
   trunk: '#5a3a1a',
-  fire: ['#ff4400', '#ff6600', '#ff8800', '#ffaa00'],
-  ash: '#444444',
+  trunkHighlight: '#7a5424',
+  fire: ['#ff3300', '#ff7700', '#ffb300', '#ffe066'],
+  fireGlow: 'rgba(255,120,0,0.45)',
+  ash: '#3a3a3a',
   dirt: '#8B6914',
-  ground: '#2a5a1a',
-  water: '#44aaff',
-  heli_body: '#cc2222',
-  heli_window: '#88ccff',
-  heli_skid: '#888888',
-  bulldozer: '#ccaa22',
-  beam: 'rgba(100,200,255,0.35)',
+  ground: '#214a14',
+  water: '#2bb6ff',
+  waterGlow: 'rgba(60,180,255,0.45)',
+  heli_body: '#e0272a',
+  heli_window: '#9fe0ff',
+  heli_skid: '#8a8a8a',
+  bulldozer: '#e0b528',
+  beam: 'rgba(120,230,255,0.35)',
+  beamCore: 'rgba(180,255,240,0.9)',
 };
 
 // ─── Utilities ─────────────────────────────────────────────────────────────────
@@ -191,6 +197,27 @@ function randFrom(arr) {
 }
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
+}
+function makeRadialGlow(ctx, x, y, r, colorInner, colorOuter) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, colorInner);
+  g.addColorStop(1, colorOuter);
+  return g;
+}
+function makeVerticalGradient(ctx, x0, y0, x1, y1, stops) {
+  const g = ctx.createLinearGradient(x0, y0, x1, y1);
+  for (const [offset, color] of stops) g.addColorStop(offset, color);
+  return g;
+}
+
+// ─── Easing ────────────────────────────────────────────────────────────────────
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+function easeOutBack(t, overshoot = 1.7) {
+  const c = overshoot;
+  return 1 + c * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2);
+}
+function triggerShake(gs, amount) {
+  gs.shakeMag = Math.max(gs.shakeMag, amount);
 }
 
 // ─── Initial world generation ──────────────────────────────────────────────────
@@ -244,26 +271,37 @@ function drawTree(ctx, x, y, variant, state) {
   const ty = y + TILE_SIZE - trunkH;
   ctx.fillStyle = COLORS.trunk;
   ctx.fillRect(tx, ty, trunkW, trunkH);
+  ctx.fillStyle = COLORS.trunkHighlight;
+  ctx.fillRect(tx, ty, 2, trunkH);
 
-  const canopyColors = [
-    '#1a8a2a', '#1e9a30', '#157022', '#2aaa38',
-  ];
   const sizes = [28, 32, 26, 30];
   const cw = sizes[variant];
   const ch = sizes[variant] - 4;
   const cx = x + TILE_SIZE / 2 - cw / 2;
   const cy = y + 4;
 
-  ctx.fillStyle = canopyColors[variant];
+  // light-to-dark radial gradient gives the canopy volume instead of a flat fill
+  const canopyGrad = makeRadialGlow(
+    ctx, cx + cw / 2 - cw * 0.18, cy + ch * 0.3, cw * 0.75,
+    COLORS.healthy[variant], COLORS.healthyDark[variant]
+  );
+  ctx.fillStyle = canopyGrad;
   ctx.fillRect(cx, cy, cw, ch);
-  // darker center shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.12)';
-  ctx.fillRect(cx + 4, cy + 4, cw - 8, ch - 8);
 }
 
 function drawFire(ctx, x, y, tick) {
   const flicker = (tick % 8 < 4) ? 0 : 2;
-  const colors = ['#ff4400', '#ff6600', '#ffaa00'];
+  const cx = x + TILE_SIZE / 2;
+  const cy = y + TILE_SIZE - 14;
+
+  // additive bloom halo behind the flame shapes
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = makeRadialGlow(ctx, cx, cy, 28, COLORS.fireGlow, 'rgba(255,120,0,0)');
+  ctx.fillRect(x - 10, y - 10, TILE_SIZE + 20, TILE_SIZE + 20);
+  ctx.restore();
+
+  const colors = COLORS.fire;
   // base flame
   ctx.fillStyle = colors[0];
   ctx.fillRect(x + 4, y + TILE_SIZE - 20, TILE_SIZE - 8, 20);
@@ -271,6 +309,8 @@ function drawFire(ctx, x, y, tick) {
   ctx.fillRect(x + 8, y + TILE_SIZE - 28 + flicker, TILE_SIZE - 16, 16);
   ctx.fillStyle = colors[2];
   ctx.fillRect(x + 12, y + TILE_SIZE - 34 + flicker, TILE_SIZE - 24, 12);
+  ctx.fillStyle = colors[3];
+  ctx.fillRect(x + 16, y + TILE_SIZE - 38 + flicker, TILE_SIZE - 32, 8);
 }
 
 function drawHelicopter(ctx, hx, hy, frame) {
@@ -633,8 +673,19 @@ function drawAnimal(ctx, screenX, screenY, type, frame, animalId) {
 function drawWaterDrop(ctx, x, y) {
   const rx = Math.round(x);
   const ry = Math.round(y);
-  // main drop body
-  ctx.fillStyle = '#1188ee';
+
+  // soft glow halo
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = makeRadialGlow(ctx, rx, ry, 16, COLORS.waterGlow, 'rgba(60,180,255,0)');
+  ctx.fillRect(rx - 16, ry - 16, 32, 32);
+  ctx.restore();
+
+  // main drop body — vertical gradient for volume
+  const bodyGrad = makeVerticalGradient(ctx, rx, ry - 12, rx, ry + 10, [
+    [0, '#0a6fc4'], [1, COLORS.water],
+  ]);
+  ctx.fillStyle = bodyGrad;
   ctx.fillRect(rx - 6, ry - 4, 12, 14);
   // tapered tip (top)
   ctx.fillRect(rx - 4, ry - 8, 8, 6);
@@ -814,6 +865,18 @@ function drawNet(ctx, heliX, heliY, netY, animalX, animalY, phase) {
   const ny = Math.round(netY);
   const netW = 24;
 
+  // glowing rescue beam shaft from helicopter belly down to the net
+  if (phase === 'net_descending' || phase === 'retracting') {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const shaftGrad = makeVerticalGradient(ctx, hx, heliY + 25, hx, ny, [
+      [0, 'rgba(180,255,240,0.0)'], [0.5, COLORS.beam], [1, 'rgba(180,255,240,0.0)'],
+    ]);
+    ctx.fillStyle = shaftGrad;
+    ctx.fillRect(hx - 6, heliY + 25, 12, ny - (heliY + 25));
+    ctx.restore();
+  }
+
   // rope lines from helicopter skids
   ctx.strokeStyle = '#8B6914';
   ctx.lineWidth = 2;
@@ -853,12 +916,15 @@ function drawNet(ctx, heliX, heliY, netY, animalX, animalY, phase) {
   ctx.arc(hx, netBot, netW / 2, 0, Math.PI);
   ctx.stroke();
 
-  // captured animal glow
+  // captured animal glow — bright core fading to transparent
   if (phase === 'capturing' || phase === 'retracting') {
-    ctx.fillStyle = 'rgba(100,255,150,0.3)';
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = makeRadialGlow(ctx, hx, ny + 10, 14, COLORS.beamCore, 'rgba(180,255,240,0)');
     ctx.beginPath();
-    ctx.arc(hx, ny + 10, 12, 0, Math.PI * 2);
+    ctx.arc(hx, ny + 10, 14, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
   }
 }
 
@@ -866,12 +932,15 @@ function drawCrunchParticles(ctx, x, y, frame) {
   const age = frame % 30;
   if (age > 15) return;
   const spread = age * 2;
-  ctx.fillStyle = `rgba(139,105,20,${1 - age / 15})`;
-  for (let i = 0; i < 6; i++) {
-    const angle = (i / 6) * Math.PI * 2;
+  const alpha = 1 - age / 15;
+  const debrisColors = ['rgba(139,105,20,', 'rgba(202,187,136,'];
+  for (let i = 0; i < 9; i++) {
+    const angle = (i / 9) * Math.PI * 2;
+    const size = 3 + (i % 3);
     const px = x + Math.cos(angle) * spread;
     const py = y + Math.sin(angle) * spread;
-    ctx.fillRect(px - 2, py - 2, 4, 4);
+    ctx.fillStyle = debrisColors[i % 2] + alpha + ')';
+    ctx.fillRect(px - size / 2, py - size / 2, size, size);
   }
 }
 
@@ -881,7 +950,7 @@ export default function RainforestRescue() {
   const stateRef = useRef(null);  // mutable game state (not re-render on every frame)
   const rafRef = useRef(null);
 
-  const [gamePhase, setGamePhase] = useState('start'); // start | playing | grammar | levelcomplete | victory | gameover
+  const [gamePhase, setGamePhase] = useState('start'); // start | levelintro | playing | grammar | levelcomplete | victory | gameover
   const [fuel, setFuel] = useState(100);
   const [water, setWater] = useState(100);
   const [damage, setDamage] = useState(0);
@@ -913,6 +982,10 @@ export default function RainforestRescue() {
       waterSplashes: [],
       obstacles: [],
       crunchEffects: [],
+      scorePopups: [],
+      shakeMag: 0,
+      shakeDecay: 0.9,
+      damageShakeTier: 0,
       bulldozers: [{ x: -80, y: (GROUND_ROW) * TILE_SIZE - 10, fuel: 100, stalled: 0, stopped: false, speed: levelConfig.bdSpeed, lastMove: Date.now() }],
       lastBulldozerSpawn: Date.now(),
       scrollX: 0,
@@ -998,6 +1071,12 @@ export default function RainforestRescue() {
 
     gs.frame++;
 
+    // ── Screen shake decay ────────────────────────────────────────────────────
+    gs.shakeMag *= gs.shakeDecay;
+    if (gs.shakeMag < 0.05) gs.shakeMag = 0;
+    const shakeX = (Math.random() - 0.5) * gs.shakeMag;
+    const shakeY = (Math.random() - 0.5) * gs.shakeMag;
+
     // ── Input & helicopter physics ────────────────────────────────────────────
     const { keys, heli } = gs;
     const THRUST = 0.28;
@@ -1036,6 +1115,12 @@ export default function RainforestRescue() {
     } else {
       heli.damage = Math.max(0, (heli.damage || 0) - 0.05);
     }
+    // shake once per 25% damage threshold crossed, not every frame
+    const damageTier = Math.floor((heli.damage || 0) / 25);
+    if (damageTier > gs.damageShakeTier) {
+      triggerShake(gs, 3);
+    }
+    gs.damageShakeTier = damageTier;
 
     // ── Water drops ──────────────────────────────────────────────────────────
     if (keys[' '] && gs.water > 0 && gs.frame % 12 === 0) {
@@ -1056,10 +1141,18 @@ export default function RainforestRescue() {
         if (midTile && midTile.type === TILE_FIRE) {
           midTile.type = TILE_HEALTHY;
           midTile.treeVariant = randInt(0, 3);
-          for (let p = 0; p < 4; p++) {
-            const angle = (p / 4) * Math.PI * 2;
-            gs.waterSplashes.push({ x: drop.x, y: drop.y, vx: Math.cos(angle) * 2, vy: Math.sin(angle) * 1.5 - 1, life: 10 });
+          for (let p = 0; p < 7; p++) {
+            const angle = (p / 7) * Math.PI * 2;
+            gs.waterSplashes.push({
+              x: drop.x, y: drop.y,
+              vx: Math.cos(angle) * (2 + Math.random()),
+              vy: Math.sin(angle) * 1.5 - 1,
+              life: 10,
+              size: 2 + Math.random() * 3,
+              bright: p % 2 === 0,
+            });
           }
+          triggerShake(gs, 2);
           gs.waterDrops.splice(i, 1);
           continue;
         }
@@ -1085,15 +1178,18 @@ export default function RainforestRescue() {
           }
         }
         // Radial splash particles
-        for (let p = 0; p < 6; p++) {
-          const angle = (p / 6) * Math.PI * 2;
+        for (let p = 0; p < 10; p++) {
+          const angle = (p / 10) * Math.PI * 2;
           gs.waterSplashes.push({
             x: drop.x, y: drop.y,
-            vx: Math.cos(angle) * 3,
+            vx: Math.cos(angle) * (2.5 + Math.random()),
             vy: Math.sin(angle) * 1.5 - 1,
             life: 12,
+            size: 2 + Math.random() * 3,
+            bright: p % 2 === 0,
           });
         }
+        triggerShake(gs, 2);
         gs.waterDrops.splice(i, 1);
       }
     }
@@ -1116,6 +1212,13 @@ export default function RainforestRescue() {
       sp.y += sp.vy || 0;
       sp.life--;
       if (sp.life <= 0) gs.waterSplashes.splice(i, 1);
+    }
+
+    // age + cull score popups
+    for (let i = gs.scorePopups.length - 1; i >= 0; i--) {
+      const p = gs.scorePopups[i];
+      p.age++;
+      if (p.age >= p.life) gs.scorePopups.splice(i, 1);
     }
 
     // ── Fire spread ──────────────────────────────────────────────────────────
@@ -1179,6 +1282,7 @@ export default function RainforestRescue() {
             bd.fuel -= BULLDOZER_FUEL_LOSS;
             bd.stalled = BULLDOZER_STALL_TIME;
             gs.crunchEffects.push({ x: obs.x, y: obs.y, startFrame: gs.frame });
+            triggerShake(gs, 4);
             gs.obstacles.splice(i, 1);
             break;
           }
@@ -1227,8 +1331,8 @@ export default function RainforestRescue() {
       if (animal.rescuePhase) {
         animal.rescueFrame++;
         if (animal.rescuePhase === 'net_descending') {
-          // net descends from heli toward animal
-          const progress = Math.min(1, animal.rescueFrame / 30);
+          // net descends from heli toward animal, decelerating as it settles
+          const progress = easeOutCubic(Math.min(1, animal.rescueFrame / 30));
           animal.netY = heli.y + 25 + (ay - heli.y - 25) * progress;
           if (animal.rescueFrame >= 30) {
             animal.rescuePhase = 'capturing';
@@ -1242,12 +1346,17 @@ export default function RainforestRescue() {
             animal.captureY = ay;
           }
         } else if (animal.rescuePhase === 'retracting') {
-          const progress = Math.min(1, animal.rescueFrame / 30);
+          // little overshoot-then-settle for a satisfying "catch" feel
+          const progress = easeOutBack(Math.min(1, animal.rescueFrame / 30));
           animal.netY = animal.captureY + (heli.y + 25 - animal.captureY) * progress;
           if (animal.rescueFrame >= 30) {
             animal.saved = true;
             animal.rescuePhase = null;
             gs.animalsSaved++;
+            gs.scorePopups.push({
+              x: heli.x, y: heli.y, age: 0, life: 60,
+              text: `+1 ${ANIMAL_EMOJI[animal.type] || ''}`,
+            });
           }
         }
         continue; // skip proximity check during active rescue
@@ -1283,13 +1392,17 @@ export default function RainforestRescue() {
 
     // ─── RENDER ──────────────────────────────────────────────────────────────
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
 
     const sx = Math.round(gs.scrollX);
 
     // Sky gradient
     const skyGrad = ctx.createLinearGradient(0, 0, 0, GROUND_ROW * TILE_SIZE);
-    skyGrad.addColorStop(0, '#0a3d5c');
-    skyGrad.addColorStop(1, '#1a7aaa');
+    skyGrad.addColorStop(0, COLORS.sky[0]);
+    skyGrad.addColorStop(0.4, COLORS.sky[1]);
+    skyGrad.addColorStop(0.75, COLORS.sky[2]);
+    skyGrad.addColorStop(1, COLORS.sky[3]);
     ctx.fillStyle = skyGrad;
     ctx.fillRect(0, 0, CANVAS_W, GROUND_ROW * TILE_SIZE);
 
@@ -1371,11 +1484,15 @@ export default function RainforestRescue() {
           // proximity indicator (progress ring)
           if (animal.beamTimer > 0) {
             const progress = animal.beamTimer / 90;
+            ctx.save();
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = 'rgba(100,255,200,0.8)';
             ctx.strokeStyle = `rgba(100,255,200,${0.5 + progress * 0.5})`;
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.arc(ax, ay - 12, 20, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
             ctx.stroke();
+            ctx.restore();
           }
           drawAnimal(ctx, ax, ay, animal.type, gs.frame, animal.id);
         }
@@ -1406,11 +1523,21 @@ export default function RainforestRescue() {
     // Splash particles
     for (const splash of gs.waterSplashes) {
       const alpha = splash.life / 12;
-      ctx.fillStyle = `rgba(68,170,255,${alpha})`;
-      ctx.fillRect(splash.x - sx - 3, splash.y - 3, 6, 6);
+      const size = splash.size || 6;
+      const px = splash.x - sx;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const glow = ctx.createRadialGradient(px, splash.y, 0, px, splash.y, size);
+      glow.addColorStop(0, splash.bright ? `rgba(220,245,255,${alpha})` : `rgba(120,200,255,${alpha})`);
+      glow.addColorStop(1, 'rgba(68,170,255,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(px, splash.y, size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
       // inner bright core
-      ctx.fillStyle = `rgba(170,230,255,${alpha * 0.8})`;
-      ctx.fillRect(splash.x - sx - 1, splash.y - 1, 3, 3);
+      ctx.fillStyle = `rgba(220,245,255,${alpha * 0.9})`;
+      ctx.fillRect(px - 1.5, splash.y - 1.5, 3, 3);
     }
 
     // Bulldozers
@@ -1423,6 +1550,24 @@ export default function RainforestRescue() {
 
     // Helicopter
     drawHelicopter(ctx, heli.x - sx, heli.y, gs.frame);
+
+    // Score popups
+    for (const pop of gs.scorePopups) {
+      const t = pop.age / pop.life;
+      const yOff = -easeOutCubic(t) * 40;
+      const alpha = t < 0.7 ? 1 : Math.max(0, 1 - (t - 0.7) / 0.3);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.font = 'bold 16px Courier New';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#00ff88';
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = 'rgba(0,255,136,0.8)';
+      ctx.fillText(pop.text, pop.x - sx, pop.y + yOff);
+      ctx.restore();
+    }
+
+    ctx.restore();
 
     // Low resource warning overlay
     if (gs.fuel < 15 || gs.water < 15) {
@@ -1467,6 +1612,13 @@ export default function RainforestRescue() {
     rafRef.current = requestAnimationFrame(gameLoop);
     return () => cancelAnimationFrame(rafRef.current);
   }, [gamePhase, gameLoop]);
+
+  // ─── Level intro card timer ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (gamePhase !== 'levelintro') return;
+    const t = setTimeout(() => setGamePhase('playing'), 1900);
+    return () => clearTimeout(t);
+  }, [gamePhase]);
 
   // ─── Keyboard listeners ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -1513,7 +1665,7 @@ export default function RainforestRescue() {
     setWater(100);
     setAnimalsSaved(0);
     setTreesLost(0);
-    setGamePhase('playing');
+    setGamePhase('levelintro');
   };
 
   const handleRestart = () => {
@@ -1523,7 +1675,7 @@ export default function RainforestRescue() {
     setWater(100);
     setAnimalsSaved(0);
     setTreesLost(0);
-    setGamePhase('playing');
+    setGamePhase('levelintro');
   };
 
   const handleNextLevel = () => {
@@ -1534,7 +1686,7 @@ export default function RainforestRescue() {
     setWater(100);
     setAnimalsSaved(0);
     setTreesLost(0);
-    setGamePhase('playing');
+    setGamePhase('levelintro');
   };
 
   // ─── Render ───────────────────────────────────────────────────────────────────
@@ -1590,6 +1742,7 @@ export default function RainforestRescue() {
               style={{
                 width: `${100 - damage}%`,
                 background: damage > 60 ? '#ff2222' : damage > 30 ? '#ff8800' : '#44cc44',
+                '--gauge-color': damage > 60 ? '#ff222299' : damage > 30 ? '#ff880099' : '#44cc4499',
               }}
             />
           </div>
@@ -1637,7 +1790,7 @@ export default function RainforestRescue() {
 
       {/* Question Modal */}
       {gamePhase === 'grammar' && grammarQ && (
-        <div className="grammar-overlay">
+        <div className="grammar-overlay overlay-anim">
           <div className="grammar-modal">
             <div className="grammar-header">⚠ Resource Alert</div>
             <div className="grammar-subheader">{grammarReason} — Answer correctly to refill 50%!</div>
@@ -1693,7 +1846,7 @@ export default function RainforestRescue() {
 
       {/* Start Screen */}
       {gamePhase === 'start' && (
-        <div className="start-overlay">
+        <div className="start-overlay overlay-anim">
           <div className="start-title">Rainforest Rescue</div>
           <div className="start-subtitle">— 1994 Edition —</div>
 
@@ -1740,9 +1893,17 @@ export default function RainforestRescue() {
         </div>
       )}
 
+      {/* Level Intro */}
+      {gamePhase === 'levelintro' && (
+        <div className="levelintro-overlay overlay-anim">
+          <div className="levelintro-tag">Level {currentLevel}</div>
+          <div className="levelintro-title">{LEVELS[currentLevel - 1]?.name}</div>
+        </div>
+      )}
+
       {/* Level Complete */}
       {gamePhase === 'levelcomplete' && (
-        <div className="levelcomplete-overlay">
+        <div className="levelcomplete-overlay overlay-anim">
           <div className="levelcomplete-title">Level {currentLevel} Complete!</div>
           <div className="levelcomplete-sub">{LEVELS[currentLevel - 1]?.name}</div>
           <div className="gameover-stats">
@@ -1760,7 +1921,7 @@ export default function RainforestRescue() {
 
       {/* Victory */}
       {gamePhase === 'victory' && (
-        <div className="victory-overlay">
+        <div className="victory-overlay overlay-anim">
           <div className="victory-title">Mission Accomplished!</div>
           <div className="victory-sub">All 5 levels complete — the rainforest is saved!</div>
           <div className="gameover-stats">
@@ -1775,7 +1936,7 @@ export default function RainforestRescue() {
 
       {/* Game Over */}
       {gamePhase === 'gameover' && (
-        <div className="gameover-overlay">
+        <div className="gameover-overlay overlay-anim">
           <div className="gameover-title">Mission Failed</div>
           <div className="gameover-stats">
             Animals Rescued: <strong style={{ color: '#00ff88' }}>{animalsSaved}</strong><br />
